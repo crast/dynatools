@@ -6,6 +6,14 @@ such as environment, file, and most importantly EC2 role credentials providers.
 
 This uses internal packages in dynago that are in the middle of refactoring,
 so consider this in flux.
+
+Usage:
+	import "github.com/aws/aws-sdk-go/aws"
+	import "github.com/crast/dynatools/credentials"
+
+	executor := dynago.NewAwsExecutor(...)
+	credentials.New("us-east-1", aws.DefaultChainCredentials).Install(executor)
+	client := dynago.NewClient(executor)
 */
 package credentials
 
@@ -17,7 +25,10 @@ import (
 	dynaws "github.com/underarmour/dynago/internal/aws"
 )
 
-type RoleCred struct {
+/*
+Cred is a credentials proxy for dynago to adapt the aws-sdk-go creds.
+*/
+type Cred struct {
 	credentials *credentials.Credentials
 	stop        chan none
 	signer      *dynaws.AwsSigner
@@ -25,7 +36,7 @@ type RoleCred struct {
 }
 
 // Runs in a goroutine, updates creds
-func (c *RoleCred) run() {
+func (c *Cred) run() {
 	select {
 	case <-c.stop:
 		c.stop = nil
@@ -38,7 +49,7 @@ func (c *RoleCred) run() {
 	}
 }
 
-func (c *RoleCred) updateCreds() {
+func (c *Cred) updateCreds() {
 	// TODO actual error handling.
 	if val, err := c.credentials.Get(); err == nil {
 		c.signer.AccessKey = val.AccessKeyID
@@ -46,15 +57,23 @@ func (c *RoleCred) updateCreds() {
 	}
 }
 
-func (c *RoleCred) SignRequest(request *http.Request, bodyBytes []byte) {
+// Implement the AwsSigner interface
+func (c *Cred) SignRequest(request *http.Request, bodyBytes []byte) {
 	c.signer.SignRequest(request, bodyBytes)
 }
 
-func New(region string, credentials *credentials.Credentials) *RoleCred {
-	c := &RoleCred{
+/*
+Create a new credentials proxy.
+
+Will block until the credentials can be retrieved (might take time on the
+network) and also start a goroutine in the background that will retrieve
+credentials periodically from the provided credentials.
+*/
+func New(region string, credentials *credentials.Credentials) *Cred {
+	c := &Cred{
 		credentials: credentials,
 		stop:        make(chan none),
-		tick:        time.NewTicker(1 * time.Second),
+		tick:        time.NewTicker(10 * time.Second),
 		signer:      &dynaws.AwsSigner{Region: region, Service: "dynamodb"},
 	}
 	go c.run()
@@ -63,7 +82,7 @@ func New(region string, credentials *credentials.Credentials) *RoleCred {
 }
 
 // Install to the executor. Temporary hack that will go away soon.
-func (c *RoleCred) Install(executor *dynago.AwsExecutor) {
+func (c *Cred) Install(executor *dynago.AwsExecutor) {
 	requester := executor.Requester.(*dynaws.RequestMaker)
 	if s, ok := requester.Signer.(*dynaws.AwsSigner); ok {
 		c.signer.Service = s.Service
