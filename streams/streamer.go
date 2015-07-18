@@ -2,6 +2,7 @@ package streams
 
 import (
 	"github.com/underarmour/dynago"
+	"sync"
 	"time"
 )
 
@@ -36,6 +37,7 @@ type Streamer struct {
 	arn      string
 	client   *Client
 	shutdown chan struct{}
+	wg       sync.WaitGroup
 }
 
 // Describes the stream, making multiple requests if needed to list all shards.
@@ -61,6 +63,14 @@ func (s *Streamer) Describe() (*StreamDescription, error) {
 		}
 	}
 	return desc, nil
+}
+
+// Close causes the streamer to shut down all goroutines and end.
+// After close is called, this streamer is no longer valid.
+func (s *Streamer) Close() error {
+	close(s.shutdown)
+	s.wg.Wait()
+	return nil
 }
 
 /*
@@ -99,6 +109,8 @@ func (s *Streamer) ShardUpdater() <-chan *StreamerShard {
 // Helper to enable the timeout mechanism.
 func (s *Streamer) withTimeout(conf adjustConfig, closer func(), callback func(time.Duration) time.Duration) {
 	go func() {
+		s.wg.Add(1)
+		defer s.wg.Done()
 		timeout := conf.start
 		callback(0)
 		for {

@@ -8,9 +8,12 @@ import (
 )
 
 func ExampleStreamer(executor *dynago.AwsExecutor) {
-	// This presumes you know how to get your stream arn. More on this later.
-	arn := "arn:dynamodb:EXAMPLENOTREAL"
-	config := streams.NewConfig().WithExecutor(executor).WithArn(arn)
+	client := dynago.NewClient(executor)
+	result, err := client.DescribeTable("mytable")
+	if err != nil {
+		return
+	}
+	config := streams.NewConfig().WithExecutor(executor).WithArn(result.Table.LatestStreamArn)
 	streamer := streams.NewStreamer(config)
 
 	// This is actually the mainloop of the application. It doesn't need to do anything else.
@@ -19,6 +22,7 @@ func ExampleStreamer(executor *dynago.AwsExecutor) {
 		go worker(shard)
 	}
 	log.Printf("Streamer exiting.")
+	streamer.Close()
 }
 
 // Each instance of worker runs in its own goroutine, consuming a shard of the stream.
