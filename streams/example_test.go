@@ -7,16 +7,23 @@ import (
 	"github.com/underarmour/dynago"
 )
 
-func ExampleStreamer(executor *dynago.AwsExecutor) {
+var executor *dynago.AwsExecutor
+
+func ExampleStreamer() {
 	client := dynago.NewClient(executor)
 	result, err := client.DescribeTable("mytable")
 	if err != nil {
 		return
 	}
-	config := streams.NewConfig().WithExecutor(executor).WithArn(result.Table.LatestStreamArn)
+
+	config := streams.NewConfig().
+		WithExecutor(executor).
+		WithArn(result.Table.LatestStreamArn)
 	streamer := streams.NewStreamer(config)
 
-	// This is actually the mainloop of the application. It doesn't need to do anything else.
+	// This is actually the mainloop of the application. It waits for newly
+	// discovered shards to investigate, and the channel will close if the
+	// streamer is ever shut down.
 	for shard := range streamer.ShardUpdater() {
 		log.Printf("Got shard with ID %s", shard.Id())
 		go worker(shard)

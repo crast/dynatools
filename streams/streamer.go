@@ -108,8 +108,8 @@ func (s *Streamer) ShardUpdater() <-chan *StreamerShard {
 
 // Helper to enable the timeout mechanism.
 func (s *Streamer) withTimeout(conf adjustConfig, closer func(), callback func(time.Duration) time.Duration) {
+	s.wg.Add(1)
 	go func() {
-		s.wg.Add(1)
 		defer s.wg.Done()
 		timeout := conf.start
 		callback(0)
@@ -142,15 +142,26 @@ func (s *Streamer) withTimeout(conf adjustConfig, closer func(), callback func(t
 	}()
 }
 
+// Individual shard within a stream
 type StreamerShard struct {
 	id       string
 	streamer *Streamer
 }
 
+// Get the amazon AWS shard unique ID
 func (s *StreamerShard) Id() string {
 	return s.id
 }
 
+/*
+Begin consuming this shard, yielding the results on a channel.
+This consumer will self-adjust how fast it's asking for requests
+based on the rate of data received on the channel.
+
+If the consumer reaches the end of a shard's data stream (such as this shard
+is no longer actively updating) or if our Streamer is closed, then the
+goroutine will end and the channel will be closed.
+*/
 func (s *StreamerShard) Consume() <-chan Packet {
 	ch := make(chan Packet)
 	closer := func() { close(ch) }

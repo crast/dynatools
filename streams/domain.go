@@ -33,7 +33,6 @@ type SequenceNumberRange struct {
 	StartingSequenceNumber string
 }
 
-///"eventVersion":"1.0", "awsRegion":"us-east-1", "dynamodb":map[string]interface {}{"StreamViewType":"NEW_AND_OLD_IMAGES", "Keys":map[string]interface {}{"Id":map[string]interface {}{"N":"1"}}, "NewImage":map[string]interface {}{"Id":map[string]interface {}{"N":"1"}, "someval":map[string]interface {}{"N":"1437178404"}}, "OldImage":map[string]interface {}{"Id":map[string]interface {}{"N":"1"}, "someval":map[string]interface {}{"N":"1437178402"}}, "SequenceNumber":"247230900000000000003420708", "SizeBytes":38
 type StreamRecord struct {
 	Keys           dynago.Document
 	OldImage       dynago.Document
