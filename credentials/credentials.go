@@ -21,8 +21,8 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go/aws/credentials"
-	"github.com/underarmour/dynago"
-	dynaws "github.com/underarmour/dynago/internal/aws"
+	"gopkg.in/underarmour/dynago.v1"
+	dynaws "gopkg.in/underarmour/dynago.v1/internal/aws"
 )
 
 /*

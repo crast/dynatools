@@ -22,7 +22,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/underarmour/dynago"
+	"gopkg.in/underarmour/dynago.v1"
 )
 
 type Update struct {
