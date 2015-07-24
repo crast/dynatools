@@ -13,7 +13,7 @@ type DescribeStreamResponse struct {
 type GetIteratorRequest struct {
 	StreamArn         string
 	ShardId           string
-	ShardIteratorType string
+	ShardIteratorType IteratorType
 	SequenceNumber    string `json:",omitempty"`
 }
 

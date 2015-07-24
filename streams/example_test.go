@@ -4,7 +4,7 @@ import (
 	"log"
 
 	"github.com/crast/dynatools/streams"
-	"github.com/underarmour/dynago"
+	"gopkg.in/underarmour/dynago.v1"
 )
 
 var executor *dynago.AwsExecutor

@@ -1,7 +1,7 @@
 package streams
 
 import (
-	"github.com/underarmour/dynago"
+	"gopkg.in/underarmour/dynago.v1"
 )
 
 type MakeRequester interface {

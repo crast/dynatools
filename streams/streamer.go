@@ -1,7 +1,8 @@
 package streams
 
 import (
-	"github.com/underarmour/dynago"
+	"gopkg.in/underarmour/dynago.v1"
+	"log"
 	"sync"
 	"time"
 )
@@ -12,7 +13,7 @@ func NewStreamer(config *Config) *Streamer {
 	return &Streamer{
 		arn:      config.arn,
 		client:   NewClient(config),
-		shutdown: make(chan struct{}),
+		shutdown: make(chan none),
 	}
 }
 
@@ -36,7 +37,8 @@ Check example_test.go for an example of an application using streamer.
 type Streamer struct {
 	arn      string
 	client   *Client
-	shutdown chan struct{}
+	shutdown chan none
+	wakeUp   chan none
 	wg       sync.WaitGroup
 }
 
@@ -87,7 +89,8 @@ func (s *Streamer) ShardUpdater() <-chan *StreamerShard {
 	closer := func() { close(c) }
 	shards := map[string]*StreamerShard{}
 
-	s.withTimeout(shardUpdaterAdjust, closer, func(adjust time.Duration) time.Duration {
+	s.wakeUp = s.withTimeout(shardUpdaterAdjust, closer, func(adjust time.Duration) time.Duration {
+		log.Printf("Updating shard list")
 		adjust = adjustSlower
 		desc, _ := s.Describe() // TODO error handling
 		for _, shard := range desc.Shards {
@@ -107,8 +110,9 @@ func (s *Streamer) ShardUpdater() <-chan *StreamerShard {
 }
 
 // Helper to enable the timeout mechanism.
-func (s *Streamer) withTimeout(conf adjustConfig, closer func(), callback func(time.Duration) time.Duration) {
+func (s *Streamer) withTimeout(conf adjustConfig, closer func(), callback func(time.Duration) time.Duration) chan none {
 	s.wg.Add(1)
+	wake := make(chan none)
 	go func() {
 		defer s.wg.Done()
 		timeout := conf.start
@@ -137,20 +141,39 @@ func (s *Streamer) withTimeout(conf adjustConfig, closer func(), callback func(t
 				default:
 					timeout = adjust
 				}
+			case <-wake:
+				callback(-1)
 			}
 		}
 	}()
+	return wake
 }
 
 // Individual shard within a stream
 type StreamerShard struct {
 	id       string
 	streamer *Streamer
+	iterator string
 }
 
 // Get the amazon AWS shard unique ID
 func (s *StreamerShard) Id() string {
 	return s.id
+}
+
+// Denote that we want to start at the latest event in this shard.
+func (s *StreamerShard) AtLatest() {
+	s.myIterator(IteratorLatest, "")
+}
+
+// Denote we want to start at the oldest event in this shard.
+func (s *StreamerShard) AtTrimHorizon() {
+	s.myIterator(IteratorTrimHorizon, "")
+}
+
+// Start at the given sequencenumber
+func (s *StreamerShard) AtSequenceNum(seq string) {
+	s.myIterator(IteratorAfterSequence, seq)
 }
 
 /*
@@ -162,47 +185,80 @@ If the consumer reaches the end of a shard's data stream (such as this shard
 is no longer actively updating) or if our Streamer is closed, then the
 goroutine will end and the channel will be closed.
 */
-func (s *StreamerShard) Consume() <-chan Packet {
-	ch := make(chan Packet)
+func (s *StreamerShard) Consume() <-chan Update {
+	ch := make(chan Update)
 	closer := func() { close(ch) }
-	iterator, _ := s.myIterator()
-	s.streamer.withTimeout(consumeAdjust, closer, func(adjust time.Duration) time.Duration {
+	iterator := s.iterator
+	if iterator == "" {
+		panic("Iterator must be set using one of the At functions first.")
+	}
+	nothingTimes := 10
+	s.streamer.withTimeout(consumeAdjust, closer, func(timeout time.Duration) time.Duration {
 		result, err := s.streamer.client.GetRecords(iterator)
 		if err == nil {
-			iterator = result.NextShardIterator
-			ch <- Packet{
-				Timeout: adjust,
+			ch <- Update{
+				Timeout: timeout,
 				Records: result.Records,
 			}
-			if iterator == "" {
-				return stopLoop
-			} else if len(result.Records) == 0 {
-				return adjustSlower
+			if result.NextShardIterator == "" {
+				nothingTimes--
+				log.Printf("Getting to end of line  %#v %d", result, nothingTimes)
+				if nothingTimes <= 0 {
+					s.streamer.wakeUp <- none{}
+					return stopLoop
+				}
 			} else {
-				return adjustFaster
+				iterator = result.NextShardIterator
 			}
-		} else if e, ok := err.(*dynago.Error); ok {
-			panic(e)
-			_ = e // TODO even more error handling
+			if len(result.Records) == 0 {
+				timeout = adjustSlower
+			} else {
+				timeout = adjustFaster
+			}
+		} else {
+			if e, ok := err.(*dynago.Error); ok {
+				switch e.Type {
+				case dynago.ErrorThrottling, dynago.ErrorThroughputExceeded, dynago.ErrorInternalFailure:
+					return timeout + time.Second
+				case dynago.ErrorExpiredIterator, dynago.ErrorTrimmedData:
+					// TODO determine what we do on an expired iterator
+				}
+			}
+			ch <- Update{
+				Timeout: timeout,
+				Error:   err,
+			}
+			return stopLoop
 		}
-		return adjust
+		return timeout
 	})
 	return ch
 }
 
-func (s *StreamerShard) myIterator() (iterator string, err error) {
+func (s *StreamerShard) myIterator(iType IteratorType, sequenceNumber string) {
 	result, err := s.streamer.client.GetShardIterator(&GetIteratorRequest{
 		StreamArn:         s.streamer.arn,
 		ShardId:           s.id,
-		ShardIteratorType: "LATEST", // TODO variables
+		ShardIteratorType: iType,
+		SequenceNumber:    sequenceNumber,
 	})
 	if err == nil {
-		iterator = result.ShardIterator
+		s.iterator = result.ShardIterator
 	}
 	return
 }
 
-type Packet struct {
-	Timeout time.Duration
-	Records []Record
+/*
+Update is received from Consume() every time it gets a response of any sort.
+
+It's not necessarily an error if there are no records; this can happen even
+on a full shard if you're paging past a portion of the shard where there is
+no data (empty segments, old segments, etc).
+*/
+type Update struct {
+	Timeout time.Duration // How long we waited for this update
+	Records []Record      // The records we received for this update.
+	Error   error         // Any error we received from the API
 }
+
+type none struct{}
