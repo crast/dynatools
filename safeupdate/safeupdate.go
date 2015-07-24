@@ -1,11 +1,15 @@
 /*
 package safeupdate generates safe UpdateItem query expressions from dynago.
 
-So you already implemented PutItem for putting a record with a dynago.Document.
-Well that's great, and theoretically you can use PutItem for updates, but this
-can be dangerous if you consider the case of a larger application with
-versioning and so on. So you can use UpdateItem, but it's really boilerplatey,
-especially dealing with reserved words in expression attributes.
+PutItem is available and makes putting a record with a dynago.Document easy.
+In theory you can use PutItem for updates if you're doing a full update of a
+record, but this can be dangerous if you consider the case of having
+potentially multiple versions of an application deployed simultaneously, some
+of which know about more fields than the other.
+
+UpdateItem is available, but using it for a full update of a record with a
+number of attributes is really boilerplatey, especially dealing with reserved
+words in expression attributes.
 
 So the SafeUpdate package will take a Document and make an UpdateItem with the
 appropriate reserved words handled as expression attribute names, and the
@@ -42,6 +46,12 @@ on whether the document has a hash key or a hash-range key.
 
 doc should be a document more or less the same as you would provide to
 something like PutItem.
+
+Given a document with keys like Id,Name,Age,Address it generates an expression
+something like:
+	SET Address=:a, Age=:b, #c=:c
+(Name is a reserved word in dynamo so it's aliased as #c) and the appropriate
+parameter set for the expression attribute names and values.
 
 As a special case, due to special considerations in DynamoDB, if a value
 is set to the empty string or an empty set, then the expression will have
