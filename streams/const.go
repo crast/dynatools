@@ -4,20 +4,12 @@ import (
 	"time"
 )
 
-type IteratorType string
-
-const (
-	IteratorAtSequence    IteratorType = "AT_SEQUENCE_NUMBER"
-	IteratorAfterSequence IteratorType = "AFTER_SEQUENCE_NUMBER"
-	IteratorTrimHorizon   IteratorType = "TRIM_HORIZON"
-	IteratorLatest        IteratorType = "LATEST"
-)
-
 const (
 	noAdjust     = 0
 	adjustSlower = -2
 	adjustFaster = -3
 	stopLoop     = -4
+	notified     = -5
 )
 
 type adjustConfig struct {

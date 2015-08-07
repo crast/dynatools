@@ -2,6 +2,7 @@ package streams
 
 import (
 	"gopkg.in/underarmour/dynago.v1"
+	"gopkg.in/underarmour/dynago.v1/streams"
 	"log"
 	"sync"
 	"time"
@@ -12,7 +13,7 @@ type ShardWorker func(chan<- Record) error
 func NewStreamer(config *Config) *Streamer {
 	return &Streamer{
 		arn:      config.arn,
-		client:   NewClient(config),
+		client:   streams.NewClient(&streams.Config{config.executor}),
 		shutdown: make(chan none),
 	}
 }
@@ -36,19 +37,19 @@ Check example_test.go for an example of an application using streamer.
 */
 type Streamer struct {
 	arn      string
-	client   *Client
+	client   *streams.Client
 	shutdown chan none
 	wakeUp   chan none
 	wg       sync.WaitGroup
 }
 
 // Describes the stream, making multiple requests if needed to list all shards.
-func (s *Streamer) Describe() (*StreamDescription, error) {
-	req := &DescribeStreamRequest{
+func (s *Streamer) Describe() (*streams.StreamDescription, error) {
+	req := &streams.DescribeStreamRequest{
 		Limit:     100,
 		StreamArn: s.arn,
 	}
-	var desc *StreamDescription
+	var desc *streams.StreamDescription
 	for {
 		resp, err := s.client.DescribeStream(req)
 		if err != nil {
@@ -109,6 +110,10 @@ func (s *Streamer) ShardUpdater() <-chan *StreamerShard {
 	return c
 }
 
+func (s *Streamer) notifyShardDone(id string) {
+	s.wakeUp <- none{}
+}
+
 // Helper to enable the timeout mechanism.
 func (s *Streamer) withTimeout(conf adjustConfig, closer func(), callback func(time.Duration) time.Duration) chan none {
 	s.wg.Add(1)
@@ -135,6 +140,8 @@ func (s *Streamer) withTimeout(conf adjustConfig, closer func(), callback func(t
 					}
 				case noAdjust:
 					// nothing
+				case notified:
+					//nothing
 				case stopLoop:
 					closer()
 					return
@@ -142,7 +149,7 @@ func (s *Streamer) withTimeout(conf adjustConfig, closer func(), callback func(t
 					timeout = adjust
 				}
 			case <-wake:
-				callback(-1)
+				callback(notified)
 			}
 		}
 	}()
@@ -163,17 +170,17 @@ func (s *StreamerShard) Id() string {
 
 // Denote that we want to start at the latest event in this shard.
 func (s *StreamerShard) AtLatest() {
-	s.myIterator(IteratorLatest, "")
+	s.myIterator(streams.IteratorLatest, "")
 }
 
 // Denote we want to start at the oldest event in this shard.
 func (s *StreamerShard) AtTrimHorizon() {
-	s.myIterator(IteratorTrimHorizon, "")
+	s.myIterator(streams.IteratorTrimHorizon, "")
 }
 
 // Start at the given sequencenumber
 func (s *StreamerShard) AtSequenceNum(seq string) {
-	s.myIterator(IteratorAfterSequence, seq)
+	s.myIterator(streams.IteratorAfterSequence, seq)
 }
 
 /*
@@ -192,21 +199,17 @@ func (s *StreamerShard) Consume() <-chan Update {
 	if iterator == "" {
 		panic("Iterator must be set using one of the At functions first.")
 	}
-	nothingTimes := 10
+
 	s.streamer.withTimeout(consumeAdjust, closer, func(timeout time.Duration) time.Duration {
-		result, err := s.streamer.client.GetRecords(iterator)
+		result, err := s.streamer.client.GetRecords(&streams.GetRecordsRequest{ShardIterator: iterator})
 		if err == nil {
 			ch <- Update{
 				Timeout: timeout,
 				Records: result.Records,
 			}
 			if result.NextShardIterator == "" {
-				nothingTimes--
-				log.Printf("Getting to end of line  %#v %d", result, nothingTimes)
-				if nothingTimes <= 0 {
-					s.streamer.wakeUp <- none{}
-					return stopLoop
-				}
+				s.streamer.notifyShardDone(s.id)
+				return stopLoop
 			} else {
 				iterator = result.NextShardIterator
 			}
@@ -235,8 +238,8 @@ func (s *StreamerShard) Consume() <-chan Update {
 	return ch
 }
 
-func (s *StreamerShard) myIterator(iType IteratorType, sequenceNumber string) {
-	result, err := s.streamer.client.GetShardIterator(&GetIteratorRequest{
+func (s *StreamerShard) myIterator(iType streams.IteratorType, sequenceNumber string) {
+	result, err := s.streamer.client.GetShardIterator(&streams.GetIteratorRequest{
 		StreamArn:         s.streamer.arn,
 		ShardId:           s.id,
 		ShardIteratorType: iType,
@@ -256,9 +259,9 @@ on a full shard if you're paging past a portion of the shard where there is
 no data (empty segments, old segments, etc).
 */
 type Update struct {
-	Timeout time.Duration // How long we waited for this update
-	Records []Record      // The records we received for this update.
-	Error   error         // Any error we received from the API
+	Timeout time.Duration    // How long we waited for this update
+	Records []streams.Record // The records we received for this update.
+	Error   error            // Any error we received from the API
 }
 
 type none struct{}

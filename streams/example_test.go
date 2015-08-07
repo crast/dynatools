@@ -36,7 +36,7 @@ func ExampleStreamer() {
 func worker(shard *streams.StreamerShard) {
 	for packet := range shard.Consume() {
 		for _, record := range packet.Records {
-			change := record.Dynamodb
+			change := record.StreamRecord
 			log.Printf("Got record on %s: action=%s, sequence=%s || Id=%s",
 				shard.Id(), record.EventName, change.SequenceNumber, change.Keys["Id"],
 			)
