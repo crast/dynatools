@@ -1,4 +1,4 @@
-package streams_test
+package streamer_test
 
 import (
 	"log"

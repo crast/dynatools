@@ -1,4 +1,4 @@
-package streams
+package streamer
 
 import (
 	"gopkg.in/underarmour/dynago.v1"

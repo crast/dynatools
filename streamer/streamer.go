@@ -1,4 +1,4 @@
-package streams
+package streamer
 
 import (
 	"gopkg.in/underarmour/dynago.v1"
@@ -8,9 +8,9 @@ import (
 	"time"
 )
 
-type ShardWorker func(chan<- Record) error
+type ShardWorker func(chan<- streams.Record) error
 
-func NewStreamer(config *Config) *Streamer {
+func New(config *Config) *Streamer {
 	return &Streamer{
 		arn:      config.arn,
 		client:   streams.NewClient(&streams.Config{config.executor}),
