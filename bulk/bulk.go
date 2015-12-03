@@ -73,6 +73,13 @@ func (b *BulkWriter) Write(doc dynago.Document) {
 }
 
 /*
+Queue up a delete.
+*/
+func (b *BulkWriter) Delete(key dynago.Document) {
+	b.ch <- message{deleteKey: key}
+}
+
+/*
 Get the results channel.
 
 You must listen on the results channel (even if only to throw them away)
@@ -100,19 +107,23 @@ func (b *BulkWriter) main(perWrite int) {
 	}()
 	var running = true
 	for running {
-		var docs = make([]dynago.Document, 0, perWrite)
+		g := group{}
 
 		for i := 0; i < perWrite; i++ {
 			var msg message
 			msg, running = <-b.ch
 			if running {
-				docs = append(docs, msg.doc)
+				if msg.doc != nil {
+					g.docs = append(g.docs, msg.doc)
+				} else {
+					g.deleteKeys = append(g.deleteKeys, msg.deleteKey)
+				}
 			} else {
 				break
 			}
 		}
-		if len(docs) > 0 {
-			b.groups <- group{docs}
+		if g.length() > 0 {
+			b.groups <- g
 		}
 	}
 	close(b.groups)
@@ -123,58 +134,79 @@ func (b *BulkWriter) worker(id int) {
 		b.wg.Done()
 	}()
 	for group := range b.groups {
-		toWrite := group.docs
+		origGroup := group
 		waitFor := 100 * time.Millisecond
 		for i := 0; i < 5; i++ {
-			toWrite = b.runBatch(toWrite, &waitFor)
-			if len(toWrite) < len(group.docs) {
+			group = b.runBatch(group, &waitFor)
+			if group.length() < origGroup.length() {
 				break
 			}
 		}
 
 		// Run any remaining documents individually
-		for _, doc := range toWrite {
+		for _, doc := range group.docs {
 			rlist := []dynago.Document{doc}
 			for {
 				_, err := b.client.PutItem(b.table, doc).Execute()
 				if err == nil {
 					b.results <- Result{Documents: rlist}
 					break
-				} else if !b.retryLogic(err, &waitFor, rlist) {
+				} else if !b.retryLogic(err, &waitFor, rlist, nil) {
 					break
 				}
+			}
+		}
+		// run any remaining deletes individually
+		for _, key := range group.deleteKeys {
+			dList := []dynago.Document{key}
+			_, err := b.client.DeleteItem(b.table, key).Execute()
+			if err == nil {
+				b.results <- Result{DeleteKeys: dList}
+				break
+			} else if !b.retryLogic(err, &waitFor, nil, dList) {
+				break
 			}
 		}
 	}
 }
 
-func (b *BulkWriter) runBatch(toWrite []dynago.Document, waitFor *time.Duration) []dynago.Document {
-	batch := b.client.BatchWrite().Put(b.table, toWrite...)
+func (b *BulkWriter) runBatch(g group, waitFor *time.Duration) group {
+	batch := b.client.BatchWrite()
+	if len(g.docs) > 0 {
+		batch = batch.Put(b.table, g.docs...)
+	}
+	if len(g.deleteKeys) > 0 {
+		batch = batch.Delete(b.table, g.docs...)
+	}
 	result, err := batch.Execute()
 	if err == nil {
-		b.results <- Result{Documents: toWrite}
-		toWrite = nil
+		b.results <- Result{Documents: g.docs, DeleteKeys: g.deleteKeys}
+		g = group{}
 		for _, item := range result.UnprocessedItems[b.table] {
-			toWrite = append(toWrite, item.PutRequest.Item)
+			if item.PutRequest != nil {
+				g.docs = append(g.docs, item.PutRequest.Item)
+			} else {
+				g.deleteKeys = append(g.deleteKeys, item.DeleteRequest.Key)
+			}
 		}
-	} else if !b.retryLogic(err, waitFor, toWrite) {
-		return nil
+	} else if !b.retryLogic(err, waitFor, g.docs, g.deleteKeys) {
+		return group{}
 	}
-	return toWrite
+	return g
 }
 
-func (b *BulkWriter) retryLogic(err error, waitFor *time.Duration, toWrite []dynago.Document) bool {
+func (b *BulkWriter) retryLogic(err error, waitFor *time.Duration, toWrite []dynago.Document, toDelete []dynago.Document) bool {
 	if e, ok := err.(*dynago.Error); ok {
 		if canRetry(e) {
 			time.Sleep(*waitFor)
 			*waitFor *= 2
 			return true
 		} else {
-			b.results <- Result{Documents: toWrite, Error: err, DynagoError: e}
+			b.results <- Result{Documents: toWrite, DeleteKeys: toDelete, Error: err, DynagoError: e}
 			return false
 		}
 	} else {
-		b.results <- Result{Documents: toWrite, Error: err}
+		b.results <- Result{Documents: toWrite, DeleteKeys: toDelete, Error: err}
 		return false
 	}
 }
@@ -191,15 +223,22 @@ func canRetry(e *dynago.Error) bool {
 }
 
 type group struct {
-	docs []dynago.Document
+	docs       []dynago.Document
+	deleteKeys []dynago.Document
+}
+
+func (g group) length() int {
+	return len(g.docs) + len(g.deleteKeys)
 }
 
 type message struct {
-	doc dynago.Document
+	doc       dynago.Document
+	deleteKey dynago.Document
 }
 
 type Result struct {
 	Documents   []dynago.Document // The documents we're talking about
+	DeleteKeys  []dynago.Document // Deleted keys
 	Error       error             // If there's an error, then this is set
 	DynagoError *dynago.Error     // If the error happens to be a dynago.Error, then we set this too.
 }
