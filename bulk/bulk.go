@@ -176,7 +176,7 @@ func (b *BulkWriter) runBatch(g group, waitFor *time.Duration) group {
 		batch = batch.Put(b.table, g.docs...)
 	}
 	if len(g.deleteKeys) > 0 {
-		batch = batch.Delete(b.table, g.docs...)
+		batch = batch.Delete(b.table, g.deleteKeys...)
 	}
 	result, err := batch.Execute()
 	if err == nil {
